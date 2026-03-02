@@ -850,6 +850,43 @@ function maybeConfigureTelegramFromEnv() {
   }
 }
 
+function maybeFixTelegramAllowFrom() {
+  // OpenClaw requires allowFrom to include "*" when dmPolicy="open".
+  // If the existing config has dmPolicy=open but no allowFrom (or missing "*"),
+  // this migration adds it so the gateway can start without config validation errors.
+  const cfgPath = configPath();
+  try {
+    if (!fs.existsSync(cfgPath)) return;
+  } catch {
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+
+  const tg = parsed.channels?.telegram;
+  if (!tg || typeof tg !== "object") return;
+  if (tg.dmPolicy !== "open") return;
+
+  const allowFrom = Array.isArray(tg.allowFrom) ? tg.allowFrom : [];
+  if (allowFrom.includes("*")) return; // already correct
+
+  tg.allowFrom = [...allowFrom, "*"];
+  parsed.channels.telegram = tg;
+
+  try {
+    writeFile600(cfgPath, JSON.stringify(parsed, null, 2));
+    console.log("[migration] Added allowFrom=[*] to channels.telegram (required for dmPolicy=open)");
+  } catch (err) {
+    console.warn(`[migration] Failed to fix telegram allowFrom: ${String(err)}`);
+  }
+}
+
 // Run this FIRST before other migrations — it unblocks the gateway from crash-looping.
 maybeFixInvalidProvidersKey();
 migrateThinkingDefaultKey();
@@ -858,6 +895,7 @@ maybeSetWorkspaceDir();
 maybeSyncGatewayPort();
 maybeSyncRemoteUrl();
 maybeUpgradeTelegramDmPolicy();
+maybeFixTelegramAllowFrom();
 maybeRegisterOpenAiProvider();
 
 let gatewayProc = null;
