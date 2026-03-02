@@ -621,6 +621,8 @@ function maybeUpgradeTelegramDmPolicy() {
   if (tg.dmPolicy !== "pairing") return;
 
   tg.dmPolicy = "open";
+  tg.allowFrom = tg.allowFrom || ["*"];
+  if (!tg.allowFrom.includes("*")) tg.allowFrom.push("*");
   parsed.channels.telegram = tg;
 
   try {
@@ -834,6 +836,7 @@ function maybeConfigureTelegramFromEnv() {
   parsed.channels.telegram = {
     enabled: true,
     dmPolicy: "open",
+    allowFrom: ["*"],
     botToken,
     groupPolicy: "allowlist",
     streamMode: "partial",
