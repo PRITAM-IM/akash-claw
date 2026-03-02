@@ -341,11 +341,38 @@ function bootstrapConfigIfMissing() {
   const remoteBlock = { token: OPENCLAW_GATEWAY_TOKEN };
   if (publicUrl) remoteBlock.url = publicUrl;
 
-  // agents.defaults.model only accepts { primary, fallback } — NOT providers.
-  // providers belongs at the top-level models.providers path.
-  const modelBlock = { primary: BOOTSTRAP_DEFAULT_MODEL };
+  // When OPENAI_API_KEY is present and no Codex OAuth is configured, use the
+  // plain OpenAI provider. We must NOT put providers inside agents.defaults.model
+  // (that key is invalid there) — instead they go at the top-level models.providers.
+  const hasApiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const hasCodexCreds = Boolean(CODEX_CLI_AUTH_JSON || CODEX_CLI_AUTH_B64);
+  const useOpenAi = hasApiKey && !hasCodexCreds;
 
-  // Minimal config that matches how we launch the gateway and sets Codex model defaults.
+  // Use gpt-4o when falling back to API key, regardless of OPENCLAW_BOOTSTRAP_DEFAULT_MODEL
+  // (which may be set to the Codex model that requires expired OAuth).
+  const effectiveModel = useOpenAi ? "openai/gpt-4o" : BOOTSTRAP_DEFAULT_MODEL;
+
+  const modelsBlock = useOpenAi ? {
+    mode: "merge",
+    providers: {
+      openai: {
+        api: "openai-completions",
+        apiKey: "${OPENAI_API_KEY}",
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          { id: "gpt-4o", name: "GPT-4o" },
+          { id: "gpt-4o-mini", name: "GPT-4o Mini" },
+          { id: "gpt-4.1", name: "GPT-4.1" },
+        ],
+      },
+    },
+  } : undefined;
+
+  if (useOpenAi) {
+    console.log("[bootstrap] OPENAI_API_KEY detected — using openai/gpt-4o as default model");
+  }
+
+  // Minimal config that matches how we launch the gateway.
   const payload = {
     gateway: {
       mode: "local",
@@ -357,18 +384,18 @@ function bootstrapConfigIfMissing() {
     },
     agents: {
       defaults: {
-        // Keep long-lived state (memory, files, etc.) on the persistent volume.
         workspace: WORKSPACE_DIR,
-        model: modelBlock,
+        model: { primary: effectiveModel },
         thinkingDefault: BOOTSTRAP_THINKING_DEFAULT,
       },
     },
+    ...(modelsBlock ? { models: modelsBlock } : {}),
   };
 
   try {
     fs.mkdirSync(path.dirname(configPath()), { recursive: true });
     writeFile600(configPath(), JSON.stringify(payload, null, 2));
-    console.log(`[bootstrap] wrote config to ${configPath()}`);
+    console.log(`[bootstrap] wrote config to ${configPath()} (model=${effectiveModel})`);
   } catch (err) {
     console.warn(`[bootstrap] failed to write config: ${String(err)}`);
   }
@@ -2171,6 +2198,9 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
   try {
     bootstrapCodexCliAuth();
     bootstrapConfigIfMissing();
+    // Run provider migration AFTER bootstrap so it can patch a config that was
+    // just written moments ago (migrations at module-load time run before bootstrap).
+    maybeRegisterOpenAiProvider();
   } catch (err) {
     console.warn(`[bootstrap] failed: ${String(err)}`);
   }
