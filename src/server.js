@@ -801,6 +801,52 @@ function maybeRegisterOpenAiProvider() {
   }
 }
 
+function maybeConfigureTelegramFromEnv() {
+  // If TELEGRAM_BOT_TOKEN is set in the Railway environment, write it into the
+  // OpenClaw config so the Telegram channel works without going through the /setup UI.
+  // This is the most robust headless method — it persists across redeploys and
+  // doesn't require browser auth.
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!botToken) return;
+
+  const cfgPath = configPath();
+  try {
+    if (!fs.existsSync(cfgPath)) return;
+  } catch {
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+
+  // Don't overwrite if already configured with the same token.
+  const existing = parsed.channels?.telegram;
+  if (existing && typeof existing === "object" && existing.botToken === botToken && existing.enabled) {
+    return;
+  }
+
+  if (!parsed.channels || typeof parsed.channels !== "object") parsed.channels = {};
+  parsed.channels.telegram = {
+    enabled: true,
+    dmPolicy: "open",
+    botToken,
+    groupPolicy: "allowlist",
+    streamMode: "partial",
+  };
+
+  try {
+    writeFile600(cfgPath, JSON.stringify(parsed, null, 2));
+    console.log("[migration] Configured Telegram channel from TELEGRAM_BOT_TOKEN env var");
+  } catch (err) {
+    console.warn(`[migration] Failed to configure Telegram: ${String(err)}`);
+  }
+}
+
 // Run this FIRST before other migrations — it unblocks the gateway from crash-looping.
 maybeFixInvalidProvidersKey();
 migrateThinkingDefaultKey();
@@ -2201,6 +2247,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     // Run provider migration AFTER bootstrap so it can patch a config that was
     // just written moments ago (migrations at module-load time run before bootstrap).
     maybeRegisterOpenAiProvider();
+    maybeConfigureTelegramFromEnv();
   } catch (err) {
     console.warn(`[bootstrap] failed: ${String(err)}`);
   }
