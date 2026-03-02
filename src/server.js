@@ -341,23 +341,9 @@ function bootstrapConfigIfMissing() {
   const remoteBlock = { token: OPENCLAW_GATEWAY_TOKEN };
   if (publicUrl) remoteBlock.url = publicUrl;
 
-  // Determine model provider based on available credentials.
-  // If only OPENAI_API_KEY is set (no Codex OAuth), use plain OpenAI provider.
-  const hasOpenAiApiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
-  const hasCodexAuth = Boolean(CODEX_CLI_AUTH_JSON || CODEX_CLI_AUTH_B64);
-  const modelProvider = (hasOpenAiApiKey && !hasCodexAuth)
-    ? {
-      primary: BOOTSTRAP_DEFAULT_MODEL,
-      // Register plain OpenAI provider using the api key from env
-      providers: {
-        openai: {
-          api: "openai-completions",
-          apiKey: "${OPENAI_API_KEY}",
-          baseUrl: "https://api.openai.com/v1",
-        },
-      },
-    }
-    : { primary: BOOTSTRAP_DEFAULT_MODEL };
+  // agents.defaults.model only accepts { primary, fallback } — NOT providers.
+  // providers belongs at the top-level models.providers path.
+  const modelBlock = { primary: BOOTSTRAP_DEFAULT_MODEL };
 
   // Minimal config that matches how we launch the gateway and sets Codex model defaults.
   const payload = {
@@ -373,7 +359,7 @@ function bootstrapConfigIfMissing() {
       defaults: {
         // Keep long-lived state (memory, files, etc.) on the persistent volume.
         workspace: WORKSPACE_DIR,
-        model: modelProvider,
+        model: modelBlock,
         thinkingDefault: BOOTSTRAP_THINKING_DEFAULT,
       },
     },
@@ -681,6 +667,44 @@ function maybeSyncRemoteUrl() {
   }
 }
 
+function maybeFixInvalidProvidersKey() {
+  // EMERGENCY FIX: a previous deploy incorrectly placed a "providers" key inside
+  // agents.defaults.model. OpenClaw's config schema does NOT allow that key there
+  // (it lives at top-level models.providers). The bad key causes:
+  //   "Config invalid: agents.defaults.model: Unrecognized key: providers"
+  // which makes the gateway exit with code=1 immediately on every boot.
+  // This migration removes it so the gateway can start normally.
+  const cfgPath = configPath();
+  try {
+    if (!fs.existsSync(cfgPath)) return;
+  } catch {
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+
+  const model = parsed.agents?.defaults?.model;
+  if (!model || typeof model !== "object") return;
+  if (!Object.prototype.hasOwnProperty.call(model, "providers")) return;
+
+  delete model.providers;
+
+  try {
+    writeFile600(cfgPath, JSON.stringify(parsed, null, 2));
+    console.log("[migration] Removed invalid agents.defaults.model.providers key (gateway can now start)");
+  } catch (err) {
+    console.warn(`[migration] Failed to remove invalid providers key: ${String(err)}`);
+  }
+}
+
+// Run this FIRST before other migrations — it unblocks the gateway from crash-looping.
+maybeFixInvalidProvidersKey();
 migrateThinkingDefaultKey();
 maybeEnableControlUiAllowInsecureAuth();
 maybeSetWorkspaceDir();
