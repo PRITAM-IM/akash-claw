@@ -5,6 +5,7 @@ builder = "dockerfile"
 healthcheckPath = "/setup/healthz"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
+startCommand = "node src/server.js"
 
 [variables]
 # Railway public HTTP should target the wrapper on 8080.

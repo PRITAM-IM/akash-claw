@@ -703,6 +703,77 @@ function maybeFixInvalidProvidersKey() {
   }
 }
 
+function maybeRegisterOpenAiProvider() {
+  // The bot receives messages but never replies when the configured model
+  // (openai-codex/gpt-5.3-codex) needs Codex OAuth that has expired.
+  //
+  // If OPENAI_API_KEY is set in env, this migration:
+  //   1. Registers it under models.providers.openai (the correct top-level path)
+  //   2. Switches agents.defaults.model.primary to openai/gpt-4o (works with API key)
+  //
+  // This makes the bot reply using the standard OpenAI API — no Codex OAuth needed.
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) return; // nothing to do without a key
+
+  const cfgPath = configPath();
+  try {
+    if (!fs.existsSync(cfgPath)) return;
+  } catch {
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  } catch {
+    return; // JSON5 or corrupt — skip
+  }
+  if (!parsed || typeof parsed !== "object") return;
+
+  // Only register if not already present (avoid overwriting user customisation).
+  const existingProviders = parsed.models?.providers;
+  if (existingProviders && typeof existingProviders === "object" && existingProviders.openai) {
+    return; // already configured
+  }
+
+  // Write models.providers.openai at top level.
+  if (!parsed.models || typeof parsed.models !== "object") parsed.models = {};
+  if (!parsed.models.providers || typeof parsed.models.providers !== "object") {
+    parsed.models.providers = {};
+  }
+  parsed.models.mode = parsed.models.mode || "merge";
+  parsed.models.providers.openai = {
+    api: "openai-completions",
+    apiKey: "${OPENAI_API_KEY}",
+    baseUrl: "https://api.openai.com/v1",
+    models: [
+      { id: "gpt-4o", name: "GPT-4o" },
+      { id: "gpt-4o-mini", name: "GPT-4o Mini" },
+      { id: "gpt-4.1", name: "GPT-4.1" },
+    ],
+  };
+
+  // Switch default model to gpt-4o if it's still pointing at Codex.
+  const defaults = parsed.agents?.defaults;
+  if (defaults && typeof defaults === "object") {
+    const model = defaults.model && typeof defaults.model === "object" ? defaults.model : {};
+    const primary = model.primary || "";
+    if (!primary || primary.startsWith("openai-codex/")) {
+      model.primary = "openai/gpt-4o";
+      defaults.model = model;
+      if (!parsed.agents) parsed.agents = {};
+      parsed.agents.defaults = defaults;
+    }
+  }
+
+  try {
+    writeFile600(cfgPath, JSON.stringify(parsed, null, 2));
+    console.log("[migration] Registered OPENAI_API_KEY as models.providers.openai and set default model to openai/gpt-4o (bot will now reply)");
+  } catch (err) {
+    console.warn(`[migration] Failed to register OpenAI provider: ${String(err)}`);
+  }
+}
+
 // Run this FIRST before other migrations — it unblocks the gateway from crash-looping.
 maybeFixInvalidProvidersKey();
 migrateThinkingDefaultKey();
@@ -711,6 +782,7 @@ maybeSetWorkspaceDir();
 maybeSyncGatewayPort();
 maybeSyncRemoteUrl();
 maybeUpgradeTelegramDmPolicy();
+maybeRegisterOpenAiProvider();
 
 let gatewayProc = null;
 let gatewayStarting = null;
