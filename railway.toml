@@ -1,0 +1,16 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/setup/healthz"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+
+[variables]
+# Railway public HTTP should target the wrapper on 8080.
+PORT = "8080"
+# Defaults that work even without a mounted Railway volume.
+OPENCLAW_STATE_DIR = "/root/.openclaw"
+OPENCLAW_WORKSPACE_DIR = "/root/.openclaw/workspace"
+# Override this in Railway Variables with your own secret.
+SETUP_PASSWORD = "change-me-in-railway"
